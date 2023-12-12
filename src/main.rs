@@ -11,6 +11,9 @@ use pcap::{Capture, Packet};
 mod hdr_parser;
 use hdr_parser::{FlowId, LayerStats, Parser, Proto};
 
+mod publisher;
+use publisher::Publisher;
+
 #[derive(Default, Clone, Debug)]
 struct Time {
     val: DateTime<Utc>,
@@ -52,7 +55,7 @@ impl PacketStats {
     }
 
     fn get_5tuple(&self) -> String {
-        let mut proto: Proto = Proto::NotImplemented;
+        let mut proto: Proto = Proto::Unknown;
         for layer in self.layers.iter().rev() {
             if layer.proto.is_transport() {
                 proto = layer.proto;
@@ -60,11 +63,49 @@ impl PacketStats {
             }
         }
 
-        if proto == Proto::NotImplemented {
-            return "(<unknown>)".to_string();
+        if proto == Proto::Unknown {
+            return "Unknown".to_string();
         }
 
-        format!("({}, {}, {:?}) --> ({}, {}, {:?})", self.flow.src_ip, self.flow.src_port, proto, self.flow.dst_ip, self.flow.dst_port, proto)
+        format!(
+            "({}, {}, {:?}) --> ({}, {}, {:?})",
+            self.flow.src_ip,
+            self.flow.src_port,
+            proto,
+            self.flow.dst_ip,
+            self.flow.dst_port,
+            proto
+        )
+    }
+
+    fn to_json_bytes(&self) -> Vec<u8> {
+        format!(
+            r#"
+         {{
+             "flow": "{}",
+             "time": "{}",
+             "size": {},
+             "l2_proto": "{}",
+             "l2_size": {},
+             "l3_proto": "{}",
+             "l3_size": {},
+             "l4_proto": "{}",
+             "l4_size": {},
+             "l7_proto": "{}"
+         }}
+         "#,
+            self.get_5tuple(),
+            self.time.val.timestamp_micros(),
+            self.size_b,
+            self.layers[0].proto,
+            self.layers[0].size_b,
+            self.layers[1].proto,
+            self.layers[1].size_b,
+            self.layers[2].proto,
+            self.layers[2].size_b,
+            self.layers[3].proto,
+        )
+        .into_bytes()
     }
 }
 
@@ -126,13 +167,18 @@ fn open_capture() -> Result<Capture<pcap::Offline>, String> {
     })
 }
 
-fn main() -> Result<(), String> {
+#[tokio::main]
+async fn main() -> Result<(), String> {
+    let publisher = Publisher::connect("localhost", 5672, "pcapan", "pass1").await?;
+    println!("Connected to RabbitMQ");
+
     let mut cap = open_capture()?;
     println!("Opened capture");
 
     let mut handled = 0usize;
     while let Ok(packet) = cap.next_packet() {
         let stats = PacketStats::parse(packet)?;
+
         #[cfg(debug_assertions)]
         println!(
             "pkt #{} (flow={}), size={}B, time={:?}, layers=[{}]",
@@ -142,12 +188,14 @@ fn main() -> Result<(), String> {
             stats.time,
             stats.layers.iter().format(", ")
         );
-        handled += 1;
 
-        if handled == 5 {
-            //break;
-        }
+        let data = stats.to_json_bytes();
+        publisher.send(data).await?;
+
+        handled += 1;
     }
+
+    publisher.wait_all_sends().await;
 
     println!("Handled {} pkts", handled);
 

@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Display, net::{IpAddr, Ipv4Addr, Ipv6Addr}};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 use pcap::Packet;
 
@@ -27,7 +31,7 @@ impl Default for FlowId {
 pub enum Proto {
     #[default]
     NotExist,
-    NotImplemented,
+    Unknown,
     Http,
     Dns,
     Ssdp,
@@ -48,6 +52,12 @@ impl Proto {
             Proto::Quic | Proto::Tls | Proto::Tcp | Proto::Udp => true,
             _ => false,
         }
+    }
+}
+
+impl Display for Proto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
     }
 }
 
@@ -137,7 +147,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         };
 
         let protos: Vec<Box<dyn ProtoParser>> = vec![
-            Box::new(PayloadParser::new(Proto::NotImplemented)),
+            Box::new(PayloadParser::new(Proto::Unknown)),
             Box::new(PayloadParser::new(Proto::Http)),
             Box::new(PayloadParser::new(Proto::Quic)),
             Box::new(PayloadParser::new(Proto::Tls)),
@@ -185,7 +195,9 @@ trait ProtoParser {
     fn name(&self) -> Proto;
     fn parse_hdr_size(&self, pkt: &Packet) -> Result<u64, ParserError>;
     fn detect_next(&self, pkt: &Packet) -> Result<Option<Proto>, ParserError>;
-    fn try_parse_flow_id(&self, _pkt: &Packet, _flow: &mut FlowId) -> Result<(), ParserError> { Ok(()) }
+    fn try_parse_flow_id(&self, _pkt: &Packet, _flow: &mut FlowId) -> Result<(), ParserError> {
+        Ok(())
+    }
 }
 
 struct FieldParser;
@@ -214,7 +226,7 @@ impl From<&[u8]> for Integer {
     fn from(value: &[u8]) -> Self {
         let mut res: u64 = 0;
         let mut i = 0;
-        for v  in value {
+        for v in value {
             let shift = (value.len() - i - 1) * 8;
             res |= (*v as u64) << shift;
             i += 1;
@@ -240,7 +252,7 @@ impl Into<Proto> for EtherType {
             0x0800 => Proto::Ipv4,
             0x0806 => Proto::Arp,
             0x86DD => Proto::Ipv6,
-            _ => Proto::NotImplemented,
+            _ => Proto::Unknown,
         }
     }
 }
@@ -303,7 +315,7 @@ impl Into<Proto> for IpProto {
             6 => Proto::Tcp,
             17 => Proto::Udp,
             58 => Proto::Icmp,
-            _ => Proto::NotImplemented,
+            _ => Proto::Unknown,
         }
     }
 }
